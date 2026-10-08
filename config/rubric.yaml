@@ -1,1 +1,12 @@
+rubric:
+  capability_match: 30
+  project_sector_fit: 20
+  subcontract_jv_potential: 20
+  geography_fit: 10
+  project_size_complexity: 10
+  client_contractor_relevance: 10
 
+thresholds:
+  reject_below: 2.0
+  include_from: 3.0
+  priority_from: 4.0
