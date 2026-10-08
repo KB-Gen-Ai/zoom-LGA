@@ -1,0 +1,87 @@
+company:
+  name: "Zoom Al Arab General Contracting Company"
+  country: "Saudi Arabia"
+  headquarters: "Jeddah"
+  business_model:
+    - "subcontractor"
+    - "JV"
+    - "direct contractor"
+
+geography:
+  country: "Saudi Arabia"
+  known_markets:
+    - Riyadh
+    - Jeddah
+    - Al Kharj
+    - Al Jouf
+    - Yanbu
+    - Makkah
+    - AlUla
+    - Jubail
+    - KAEC
+
+capabilities:
+  core:
+    - MEP
+    - HVAC
+    - VRF
+    - chillers
+    - chilled water networks
+    - firefighting systems
+    - fire pumps
+    - plumbing
+    - drainage
+    - electrical power distribution
+    - low current systems
+  adjacent:
+    - water treatment
+    - waterproofing
+    - infrastructure
+    - roads
+    - bridges
+    - utilities
+    - storm water
+    - sewage
+    - potable water
+    - structural works
+    - civil works
+    - pre-engineered metal structures
+    - industrial piping
+    - carbon steel piping
+    - stainless steel piping
+    - HDPE piping
+    - retrofit
+    - maintenance
+    - manpower supply
+    - cement plant shutdowns
+    - mechanical works
+    - power plant piping
+
+preferred_project_signals:
+  - hotel
+  - airport
+  - metro
+  - university
+  - hospital
+  - research center
+  - defense
+  - industrial facility
+  - cement plant
+  - power plant
+  - port
+  - terminal
+  - mixed use development
+  - infrastructure
+  - utilities
+
+strong_indirect_signals:
+  - "main contractor awarded"
+  - "subcontractor"
+  - "MEP package"
+  - "MEP subcontract"
+  - "mechanical subcontract"
+  - "electrical subcontract"
+  - "HVAC package"
+  - "specialist contractor"
+  - "EPC"
+  - "construction package"
