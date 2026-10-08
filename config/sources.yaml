@@ -1,29 +1,24 @@
 sources:
-  - id: etimad
-    name: Etimad
-    type: government_tender
-    url: "https://tenders.etimad.sa/"
-    enabled: true
-    discovery_urls:
-      - "https://tenders.etimad.sa/"
-  - id: forsah
-    name: Forsah
-    type: government_private_opportunity
-    url: "https://www.forsah.sa/"
-    enabled: true
-    discovery_urls:
-      - "https://www.forsah.sa/"
-  - id: nhc
-    name: NHC Procurement
-    type: developer_procurement
-    url: "https://www.nhc.sa/en/procurement-gate/"
-    enabled: true
-    discovery_urls:
-      - "https://www.nhc.sa/en/procurement-gate/"
-  - id: tendersa
-    name: TenderSA
-    type: tender_aggregator
-    url: "https://www.tendersa.com/"
-    enabled: true
-    discovery_urls:
-      - "https://www.tendersa.com/"
+  - name: Construction Week Online
+    type: rss
+    url: https://www.constructionweekonline.com/rss
+
+  - name: Zawya Projects
+    type: rss
+    url: https://www.zawya.com/en/rss/projects
+
+  - name: Arab News Business
+    type: rss
+    url: https://www.arabnews.com/rss.xml
+
+  - name: Google News — KSA construction awards
+    type: rss
+    url: https://news.google.com/rss/search?q=saudi+construction+awarded+contract&hl=en-US&gl=US&ceid=US:en
+
+  - name: Google News — KSA MEP
+    type: rss
+    url: https://news.google.com/rss/search?q=saudi+MEP+contract+HVAC&hl=en-US&gl=US&ceid=US:en
+
+  - name: Google News — KSA tender
+    type: rss
+    url: https://news.google.com/rss/search?q=saudi+tender+issued+contractor&hl=en-US&gl=US&ceid=US:en
