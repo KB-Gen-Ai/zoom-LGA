@@ -1,0 +1,29 @@
+sources:
+  - id: etimad
+    name: Etimad
+    type: government_tender
+    url: "https://tenders.etimad.sa/"
+    enabled: true
+    discovery_urls:
+      - "https://tenders.etimad.sa/"
+  - id: forsah
+    name: Forsah
+    type: government_private_opportunity
+    url: "https://www.forsah.sa/"
+    enabled: true
+    discovery_urls:
+      - "https://www.forsah.sa/"
+  - id: nhc
+    name: NHC Procurement
+    type: developer_procurement
+    url: "https://www.nhc.sa/en/procurement-gate/"
+    enabled: true
+    discovery_urls:
+      - "https://www.nhc.sa/en/procurement-gate/"
+  - id: tendersa
+    name: TenderSA
+    type: tender_aggregator
+    url: "https://www.tendersa.com/"
+    enabled: true
+    discovery_urls:
+      - "https://www.tendersa.com/"
