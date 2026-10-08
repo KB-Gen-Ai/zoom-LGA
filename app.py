@@ -1,8 +1,16 @@
 import asyncio
 import os
 import subprocess
+from pathlib import Path
 
+import streamlit as st
+
+
+@st.cache_resource
 def ensure_playwright_browser():
+    marker = Path.home() / ".cache" / "ms-playwright" / ".installed"
+    if marker.exists():
+        return True
     result = subprocess.run(
         ["bash", "setup.sh"],
         capture_output=True,
@@ -10,9 +18,11 @@ def ensure_playwright_browser():
     )
     if result.returncode != 0:
         raise RuntimeError(
-            "Playwright browser installation failed:\n"
-            + result.stderr
+            "Playwright browser installation failed:\n" + result.stderr
         )
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
+    return True
 
 
 ensure_playwright_browser()
