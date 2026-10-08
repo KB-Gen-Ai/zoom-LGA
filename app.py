@@ -4,7 +4,7 @@ import subprocess
 
 def ensure_playwright_browser():
     result = subprocess.run(
-        ["playwright", "install", "chromium"],
+        ["bash", "setup.sh"],
         capture_output=True,
         text=True,
     )
