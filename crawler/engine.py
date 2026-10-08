@@ -1,9 +1,9 @@
-import asyncio
 import sys
 import re
 import traceback
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from difflib import SequenceMatcher
 
 import feedparser
 
@@ -26,6 +26,15 @@ _RELATIVE_RE = re.compile(
     r"(\d+)\s+(minute|hour|day|week)s?\s+ago", re.IGNORECASE
 )
 
+_STOP = {
+    "the", "a", "an", "and", "or", "for", "of", "in", "on", "to", "with",
+    "by", "at", "as", "is", "are", "was", "were", "will", "has", "have",
+    "win", "wins", "won", "secures", "secured", "signs", "signed",
+    "awarded", "award", "awards", "contract", "contracts",
+    "project", "projects", "saudi", "ksa", "arabia", "saudi arabia",
+    "news", "report", "reports", "according", "says", "said",
+}
+
 
 def log(msg):
     sys.stderr.write(f"{msg}\n")
@@ -38,11 +47,6 @@ def _candidate(text):
 
 
 def _parse_published(entry):
-    """
-    Return a timezone-aware datetime or None.
-    Tries feedparser parsed struct, RFC 2822 string, then relative
-    time in title ('2 days ago').
-    """
     for key in ("published_parsed", "updated_parsed"):
         val = entry.get(key)
         if val:
@@ -50,7 +54,6 @@ def _parse_published(entry):
                 return datetime(*val[:6], tzinfo=timezone.utc)
             except Exception:
                 pass
-
     for key in ("published", "updated"):
         raw = entry.get(key)
         if raw:
@@ -61,7 +64,6 @@ def _parse_published(entry):
                 return dt
             except Exception:
                 pass
-
     title = entry.get("title", "") or ""
     m = _RELATIVE_RE.search(title)
     if m:
@@ -74,12 +76,10 @@ def _parse_published(entry):
             "week":   timedelta(weeks=n),
         }
         return datetime.now(timezone.utc) - delta_map[unit]
-
     return None
 
 
 def _is_recent(entry, max_age_days=MAX_AGE_DAYS):
-    """STRICT: reject if we cannot confirm the item is recent."""
     dt = _parse_published(entry)
     if dt is None:
         return False, None
@@ -117,6 +117,7 @@ def _fetch_rss(source):
             kept.append({
                 "source_name": source["name"],
                 "source_url": link,
+                "title": title,
                 "raw_text": blob[:4000],
                 "published": dt.strftime("%Y-%m-%d"),
                 "published_dt": dt.isoformat(),
@@ -134,6 +135,47 @@ def _fetch_rss(source):
         return []
 
 
+# ---------------- Deduplication ----------------
+
+def _tokens(text):
+    t = re.sub(r"[^a-z0-9 ]", " ", (text or "").lower())
+    return {w for w in t.split() if len(w) >= 3 and w not in _STOP}
+
+
+def _is_duplicate(a, b):
+    """Two items are duplicates if their token sets heavily overlap
+    OR their titles are near-identical strings."""
+    ta = _tokens(a)
+    tb = _tokens(b)
+    if ta and tb:
+        jaccard = len(ta & tb) / len(ta | tb)
+        if jaccard >= 0.5:
+            return True
+    r = SequenceMatcher(None, (a or "").lower(), (b or "").lower()).ratio()
+    return r >= 0.75
+
+
+def _dedupe(items, key):
+    """
+    Keep the first item of each duplicate cluster.
+    Assumes items are already sorted best-first if you care about which
+    survives; otherwise, keeps the earliest.
+    """
+    kept = []
+    dropped = 0
+    for item in items:
+        sig = key(item)
+        if any(_is_duplicate(sig, key(k)) for k in kept):
+            dropped += 1
+            continue
+        kept.append(item)
+    if dropped:
+        log(f"[dedupe] dropped {dropped} duplicate(s)")
+    return kept
+
+
+# ---------------- Main scan ----------------
+
 async def run_scan(cfg, max_results=15, use_llm=True):
     log("=" * 60)
     log(f"[scan] START — {len(cfg.get('sources', []))} sources")
@@ -149,6 +191,10 @@ async def run_scan(cfg, max_results=15, use_llm=True):
         log("[scan] no candidates — exiting")
         log("=" * 60)
         return []
+
+    # Pre-scoring dedupe on raw title
+    all_items = _dedupe(all_items, key=lambda x: x.get("title", ""))
+    log(f"[scan] after pre-dedupe: {len(all_items)}")
 
     all_items = all_items[:MAX_ITEMS_TO_SCORE]
     log(f"[scan] scoring {len(all_items)} items in one batch call")
@@ -177,7 +223,10 @@ async def run_scan(cfg, max_results=15, use_llm=True):
             continue
         leads.append(s)
 
+    # Sort by score first, then dedupe on the enriched title
     leads.sort(key=lambda x: x.get("score", 0), reverse=True)
+    leads = _dedupe(leads, key=lambda x: x.get("title", ""))
+
     log(f"[scan] DONE — {len(leads)} leads pass threshold {threshold}")
     log("=" * 60)
     return leads[:max_results]
