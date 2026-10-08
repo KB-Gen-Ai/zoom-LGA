@@ -1,5 +1,21 @@
 import asyncio
 import os
+import subprocess
+
+def ensure_playwright_browser():
+    result = subprocess.run(
+        ["playwright", "install", "chromium"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Playwright browser installation failed:\n"
+            + result.stderr
+        )
+
+
+ensure_playwright_browser()
 
 import streamlit as st
 
