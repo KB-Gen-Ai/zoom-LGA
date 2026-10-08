@@ -1,0 +1,17 @@
+llm:
+  provider: groq
+  model: "openai/gpt-oss-120b"
+  temperature: 0.1
+
+crawler:
+  max_concurrent: 3
+  page_timeout_ms: 30000
+  word_count_threshold: 80
+
+email:
+  provider: smtp
+  host: ""
+  port: 587
+  username: ""
+  from_address: ""
+  use_tls: true
