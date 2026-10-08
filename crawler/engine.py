@@ -1,12 +1,13 @@
 import asyncio
+import sys
+import re
 import traceback
-import httpx
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
+
 import feedparser
 
-from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
-
-from services.llm import enrich_opportunity
-from services.scoring import score_opportunity
+from services.scoring import score_batch
 
 
 KEY_TERMS = [
@@ -14,132 +15,169 @@ KEY_TERMS = [
     "fire pump", "plumbing", "drainage", "electrical", "low current",
     "infrastructure", "industrial piping", "mechanical", "maintenance",
     "subcontract", "subcontractor", "epc", "cement", "power plant",
-    "hotel", "airport", "metro", "university", "hospital",
+    "hotel", "airport", "metro", "university", "hospital", "water network",
+    "tender", "awarded", "rfq", "prequalification",
 ]
 
+MAX_ITEMS_TO_SCORE = 25
+MAX_AGE_DAYS = 21
 
-def _candidate(text: str) -> bool:
+_RELATIVE_RE = re.compile(
+    r"(\d+)\s+(minute|hour|day|week)s?\s+ago", re.IGNORECASE
+)
+
+
+def log(msg):
+    sys.stderr.write(f"{msg}\n")
+    sys.stderr.flush()
+
+
+def _candidate(text):
     t = (text or "").lower()
     return sum(1 for k in KEY_TERMS if k in t) >= 2
 
 
-# ---------------- RSS path ----------------
+def _parse_published(entry):
+    """
+    Return a timezone-aware datetime or None.
+    Tries feedparser parsed struct, RFC 2822 string, then relative
+    time in title ('2 days ago').
+    """
+    for key in ("published_parsed", "updated_parsed"):
+        val = entry.get(key)
+        if val:
+            try:
+                return datetime(*val[:6], tzinfo=timezone.utc)
+            except Exception:
+                pass
+
+    for key in ("published", "updated"):
+        raw = entry.get(key)
+        if raw:
+            try:
+                dt = parsedate_to_datetime(raw)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+            except Exception:
+                pass
+
+    title = entry.get("title", "") or ""
+    m = _RELATIVE_RE.search(title)
+    if m:
+        n = int(m.group(1))
+        unit = m.group(2).lower()
+        delta_map = {
+            "minute": timedelta(minutes=n),
+            "hour":   timedelta(hours=n),
+            "day":    timedelta(days=n),
+            "week":   timedelta(weeks=n),
+        }
+        return datetime.now(timezone.utc) - delta_map[unit]
+
+    return None
+
+
+def _is_recent(entry, max_age_days=MAX_AGE_DAYS):
+    """STRICT: reject if we cannot confirm the item is recent."""
+    dt = _parse_published(entry)
+    if dt is None:
+        return False, None
+    age = datetime.now(timezone.utc) - dt
+    return age <= timedelta(days=max_age_days), dt
+
 
 def _fetch_rss(source):
-    """Return list of items from a feed URL using feedparser."""
-    print(f"[rss] fetching: {source['name']} -> {source['url']}")
+    log(f"[rss] {source['name']}")
     try:
         feed = feedparser.parse(source["url"])
         entries = feed.entries or []
-        print(f"[rss] {source['name']}: {len(entries)} entries")
-        items = []
+        kept = []
+        dropped_old = 0
+        dropped_nodate = 0
+        dropped_kw = 0
+
         for entry in entries:
+            recent, dt = _is_recent(entry)
+            if dt is None:
+                dropped_nodate += 1
+                continue
+            if not recent:
+                dropped_old += 1
+                continue
+
             title = entry.get("title", "")
             summary = entry.get("summary", "") or entry.get("description", "")
             link = entry.get("link", "")
-            published = entry.get("published", "") or entry.get("updated", "")
             blob = f"{title}\n{summary}"
             if not _candidate(blob):
+                dropped_kw += 1
                 continue
-            items.append({
+
+            kept.append({
                 "source_name": source["name"],
                 "source_url": link,
-                "raw_text": blob[:5000],
-                "published": published,
+                "raw_text": blob[:4000],
+                "published": dt.strftime("%Y-%m-%d"),
+                "published_dt": dt.isoformat(),
             })
-        print(f"[rss] {source['name']}: {len(items)} after keyword filter")
-        return items
+
+        log(
+            f"[rss]   {source['name']}: {len(entries)} raw "
+            f"-> kept {len(kept)} "
+            f"(old {dropped_old}, no-date {dropped_nodate}, kw {dropped_kw})"
+        )
+        return kept
     except Exception as e:
-        print(f"[rss] {source['name']} FAILED: {type(e).__name__}: {e}")
-        traceback.print_exc()
+        log(f"[rss]   {source['name']} FAILED: {type(e).__name__}: {e}")
+        traceback.print_exc(file=sys.stderr)
         return []
 
 
-# ---------------- HTML path (Playwright via crawl4ai) ----------------
-
-async def _crawl_html(urls, crawler_cfg):
-    browser = BrowserConfig(headless=True, verbose=False)
-    run_cfg = CrawlerRunConfig(
-        cache_mode=CacheMode.BYPASS,
-        word_count_threshold=crawler_cfg.get("word_count_threshold", 80),
-        page_timeout=crawler_cfg.get("page_timeout_ms", 30000),
-    )
-    rows = []
-    async with AsyncWebCrawler(config=browser) as crawler:
-        for source_name, source_url, url in urls:
-            print(f"[html] crawling: {source_name} -> {url}")
-            try:
-                result = await crawler.arun(url=url, config=run_cfg)
-                text = result.markdown or result.cleaned_html or ""
-                if _candidate(text):
-                    rows.append({
-                        "source_name": source_name,
-                        "source_url": url,
-                        "raw_text": text[:20000],
-                    })
-                    print(f"[html] {source_name}: MATCH")
-                else:
-                    print(f"[html] {source_name}: no keyword match")
-            except Exception as exc:
-                print(f"[html] {source_name} FAILED: {exc}")
-                rows.append({
-                    "source_name": source_name,
-                    "source_url": url,
-                    "raw_text": "",
-                    "error": str(exc),
-                })
-    return rows
-
-
-# ---------------- Dispatcher ----------------
-
 async def run_scan(cfg, max_results=15, use_llm=True):
-    print("=" * 60)
-    print(f"[scan] START — {len(cfg.get('sources', []))} sources configured")
+    log("=" * 60)
+    log(f"[scan] START — {len(cfg.get('sources', []))} sources")
 
-    all_raw = []
-    html_urls = []
-
+    all_items = []
     for source in cfg.get("sources", []):
-        stype = source.get("type", "html").lower()
-        if stype == "rss":
-            all_raw.extend(_fetch_rss(source))
-        elif stype in ("html", "playwright"):
-            html_urls.append((source["name"], source["url"], source["url"]))
-        else:
-            print(f"[scan] unknown source type: {stype} ({source.get('name')})")
+        if source.get("type", "rss").lower() == "rss":
+            all_items.extend(_fetch_rss(source))
 
-    if html_urls:
-        try:
-            all_raw.extend(await _crawl_html(html_urls, cfg["settings"]["crawler"]))
-        except Exception as e:
-            print(f"[scan] HTML crawl failed: {type(e).__name__}: {e}")
+    log(f"[scan] total candidates: {len(all_items)}")
 
-    print(f"[scan] raw items collected: {len(all_raw)}")
+    if not all_items:
+        log("[scan] no candidates — exiting")
+        log("=" * 60)
+        return []
+
+    all_items = all_items[:MAX_ITEMS_TO_SCORE]
+    log(f"[scan] scoring {len(all_items)} items in one batch call")
+
+    if not use_llm:
+        log("[scan] LLM disabled — returning unranked")
+        log("=" * 60)
+        return all_items[:max_results]
+
+    try:
+        scored = await score_batch(all_items, cfg)
+    except Exception as e:
+        log(f"[scan] score_batch FAILED: {type(e).__name__}: {e}")
+        traceback.print_exc(file=sys.stderr)
+        log("=" * 60)
+        return []
+
+    threshold = cfg.get("thresholds", {}).get("include_from", 4)
+    blocked = {"D", "E", "F", "G"}
 
     leads = []
-    for item in all_raw:
-        if not item.get("raw_text"):
+    for s in scored:
+        if s.get("score", 0) < threshold:
             continue
-        try:
-            if use_llm:
-                lead = await enrich_opportunity(item, cfg)
-            else:
-                lead = enrich_opportunity(item, cfg, force_no_llm=True)
-        except Exception as e:
-            print(f"[scan] enrich FAILED for {item.get('source_url')}: {type(e).__name__}: {e}")
+        if s.get("category") in blocked:
             continue
-        if not lead:
-            continue
-        try:
-            scored = score_opportunity(lead, cfg)
-        except Exception as e:
-            print(f"[scan] score FAILED: {type(e).__name__}: {e}")
-            continue
-        if scored["score"] >= cfg["thresholds"]["include_from"]:
-            leads.append(scored)
+        leads.append(s)
 
     leads.sort(key=lambda x: x.get("score", 0), reverse=True)
-    print(f"[scan] DONE — {len(leads)} leads above threshold")
-    print("=" * 60)
+    log(f"[scan] DONE — {len(leads)} leads pass threshold {threshold}")
+    log("=" * 60)
     return leads[:max_results]
