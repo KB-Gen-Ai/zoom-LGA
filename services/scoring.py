@@ -1,129 +1,140 @@
 import os
+import sys
 import json
-import logging
-from groq import Groq
+from datetime import datetime, timezone
 
-logger = logging.getLogger(__name__)
+from groq import Groq
 
 
 SYSTEM_PROMPT = """
 You are a lead analyst for a Saudi MEP and infrastructure subcontractor.
-Your job: read one news item or tender listing, decide whether it is a
-COMMERCIALLY ACTIONABLE LEAD, and score it 1-5.
+You will receive a numbered list of news items and tender listings.
 
-ACTIONABLE means: this is a signal the company can act on in the next
-1-30 days — a live tender, a fresh award to a main contractor, or an
-RFQ that will generate MEP subcontracting packages.
+For EACH item, output one JSON object. Return a JSON object with a single
+key "results" whose value is an array of these objects, in the same order.
 
-STEP 1 — CLASSIFY the item into exactly ONE category:
+For each item, output:
+{
+  "item_id": <int, matches input>,
+  "category": "A" | "B" | "C" | "D" | "E" | "F" | "G",
+  "score": 1-5,
+  "title": "clean headline, max 90 chars",
+  "principal": "client name or 'Not disclosed'",
+  "main_contractor": "name or 'Not disclosed'",
+  "location": "city or 'Not disclosed'",
+  "value_display": "SAR X mn / $X mn / Not disclosed",
+  "deadline": "YYYY-MM-DD or 'Not stated'",
+  "scope": ["in-scope", "trades"],
+  "why_zoom": "one sentence, evidence-based",
+  "lead_type": "TENDER" | "AWARD" | "PRE_TENDER" | "OTHER",
+  "confidence": "high" | "medium" | "low"
+}
+
+STEP 1 — CLASSIFY each item into exactly ONE category:
 
 A. LIVE_TENDER         — open tender or RFQ with a stated closing date
 B. FRESH_AWARD         — main contractor just WON a project (within 60 days)
 C. PRE_TENDER_SIGNAL   — project announced, prequalification or EOI stage
 D. PRODUCT_DEAL        — sale, supply, or distribution of equipment/products
 E. COMPLETED_NEWS      — article about something already built or finished
-F. OUT_OF_SCOPE        — work that is not MEP / infrastructure (see scope below)
-G. OPINION_OR_MARKET   — market commentary, interview, forecast, ranking
+F. OUT_OF_SCOPE        — non-MEP/non-infrastructure (see scope rules)
+G. OPINION_OR_MARKET   — commentary, interview, forecast, ranking, list
 
-STEP 2 — APPLY the score by category:
+STEP 2 — SCORE by category:
 
-A. LIVE_TENDER         → 5 if scope matches, else 2
-B. FRESH_AWARD         → 5 if MEP subpackages likely, 3 if unclear
-C. PRE_TENDER_SIGNAL   → 4 if scope matches, else 2
-D. PRODUCT_DEAL        → 1 (never a lead for a subcontractor)
-E. COMPLETED_NEWS      → 1 (already done, cannot bid)
-F. OUT_OF_SCOPE        → 1
-G. OPINION_OR_MARKET   → 1
+A → 5 if scope matches, else 2
+B → 5 if MEP subcontract packages are likely, 3 if unclear
+C → 4 if scope matches, else 2
+D → 1
+E → 1
+F → 1
+G → 1
 
-STEP 3 — SCOPE check (applies to A, B, C only):
-IN SCOPE = MEP, HVAC, VRF, chillers, chilled water, firefighting,
-fire pumps, plumbing, drainage, electrical distribution, low current,
-infrastructure utilities, industrial piping, water networks.
-OUT OF SCOPE = facade, structural steel, civil earthworks, piling,
-roads (as prime scope), architecture, fit-out joinery, landscaping,
-solar panels (as sole scope), general real estate.
+STEP 3 — SCOPE (applies to A, B, C only):
+IN: MEP, HVAC, VRF, chillers, chilled water, firefighting, fire pumps,
+plumbing, drainage, electrical distribution, low current, infrastructure
+utilities, industrial piping, water networks.
+OUT: facade, structural steel, civil earthworks, piling, roads as prime,
+architecture, fit-out joinery, landscaping, solar as sole scope, real estate.
 
-STEP 4 — GEOGRAPHY filter:
-Saudi Arabia only. If project is outside KSA, set score to 1.
-
-STEP 5 — OUTPUT strict JSON with these exact keys:
-
-{
-  "category": "A" | "B" | "C" | "D" | "E" | "F" | "G",
-  "score": 1-5,
-  "title": "clean headline, max 90 chars",
-  "principal": "client name or 'Not disclosed'",
-  "main_contractor": "name or 'Not disclosed'",
-  "location": "city, Saudi Arabia or 'Not disclosed'",
-  "value_display": "SAR X mn / $X mn / Not disclosed",
-  "deadline": "YYYY-MM-DD or 'Not stated'",
-  "scope": ["list", "of", "in-scope", "trades"],
-  "why_zoom": "one sentence, evidence-based, no fluff",
-  "lead_type": "TENDER" | "AWARD" | "PRE_TENDER" | "OTHER",
-  "confidence": "high" | "medium" | "low"
-}
+STEP 4 — GEOGRAPHY:
+Saudi Arabia only. Non-KSA project -> score 1.
 
 RULES:
-- Never invent a value, deadline, principal, or contractor. Use "Not disclosed".
-- Never output a score higher than the category allows.
-- Every "why_zoom" must cite a specific fact from the text, not generic praise.
-- Return ONLY valid JSON. No prose. No markdown fences.
+- Never invent values, deadlines, principals, or contractors.
+- Every why_zoom must cite a specific fact from the item.
+- Return ONLY valid JSON. No markdown fences. No prose.
 """
 
 
 def _client():
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
+    key = os.getenv("GROQ_API_KEY")
+    if not key:
         try:
             import streamlit as st
-            api_key = st.secrets.get("GROQ_API_KEY")
+            key = st.secrets.get("GROQ_API_KEY")
         except Exception:
             pass
-    if not api_key:
+    if not key:
         raise RuntimeError("GROQ_API_KEY not configured")
-    return Groq(api_key=api_key)
+    return Groq(api_key=key)
 
 
-def _empty_score(lead):
-    """Fallback when the LLM fails — never let a lead crash the scan."""
+def _log(msg):
+    sys.stderr.write(f"{msg}\n")
+    sys.stderr.flush()
+
+
+def _build_batch_prompt(items):
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    parts = [
+        f"TODAY IS {today}. "
+        f"Discard any item whose date is not clearly recent.\n"
+    ]
+    for i, it in enumerate(items):
+        parts.append(
+            f"ITEM {i}\n"
+            f"SOURCE: {it.get('source_name','')}\n"
+            f"URL: {it.get('source_url','')}\n"
+            f"PUBLISHED: {it.get('published','')}\n"
+            f"TEXT: {it.get('raw_text','')[:1500]}\n"
+        )
+    return "\n---\n".join(parts)
+
+
+def _empty(item_id, item):
     return {
+        "item_id": item_id,
         "category": "G",
         "score": 0,
-        "title": (lead.get("raw_text") or "")[:90],
+        "title": (item.get("raw_text") or "")[:90],
         "principal": "Not disclosed",
         "main_contractor": "Not disclosed",
         "location": "Not disclosed",
         "value_display": "Not disclosed",
         "deadline": "Not stated",
         "scope": [],
-        "why_zoom": "Scoring failed — LLM error.",
+        "why_zoom": "Scoring failed.",
         "lead_type": "OTHER",
         "confidence": "low",
-        "source_url": lead.get("source_url", ""),
-        "source_name": lead.get("source_name", ""),
-        "publisher": lead.get("source_name", ""),
+        "source_url": item.get("source_url", ""),
+        "source_name": item.get("source_name", ""),
+        "publisher": item.get("source_name", ""),
+        "published": item.get("published", ""),
     }
 
 
-def score_opportunity(lead, cfg):
-    """
-    Takes an enriched lead dict, asks Groq to classify + score it,
-    returns a flat dict with all fields merged.
-    """
-    text = lead.get("raw_text") or lead.get("title") or ""
-    if not text:
-        return _empty_score(lead)
+async def score_batch(items, cfg):
+    """One Groq call, N items in, N scored dicts out."""
+    if not items:
+        return []
 
     model = cfg.get("settings", {}).get("llm", {}).get(
         "model", "openai/gpt-oss-120b"
     )
 
-    user_payload = (
-        f"SOURCE: {lead.get('source_name','')}\n"
-        f"URL: {lead.get('source_url','')}\n"
-        f"PUBLISHED: {lead.get('published','')}\n\n"
-        f"ITEM TEXT:\n{text[:6000]}"
-    )
+    prompt = _build_batch_prompt(items)
+    _log(f"[score] batch call — {len(items)} items, prompt {len(prompt)} chars")
 
     try:
         client = _client()
@@ -131,35 +142,36 @@ def score_opportunity(lead, cfg):
             model=model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_payload},
+                {"role": "user", "content": prompt},
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
-            max_tokens=800,
+            max_tokens=4000,
         )
         raw = response.choices[0].message.content or "{}"
         parsed = json.loads(raw)
     except Exception as e:
-        logger.warning(f"score_opportunity LLM failed: {type(e).__name__}: {e}")
-        return _empty_score(lead)
+        _log(f"[score] LLM call FAILED: {type(e).__name__}: {e}")
+        return [_empty(i, it) for i, it in enumerate(items)]
 
-    # Ensure required keys exist
-    parsed.setdefault("category", "G")
-    parsed.setdefault("score", 0)
-    parsed.setdefault("title", "")
-    parsed.setdefault("principal", "Not disclosed")
-    parsed.setdefault("main_contractor", "Not disclosed")
-    parsed.setdefault("location", "Not disclosed")
-    parsed.setdefault("value_display", "Not disclosed")
-    parsed.setdefault("deadline", "Not stated")
-    parsed.setdefault("scope", [])
-    parsed.setdefault("why_zoom", "")
-    parsed.setdefault("lead_type", "OTHER")
-    parsed.setdefault("confidence", "low")
+    results = parsed.get("results") or []
+    _log(f"[score] LLM returned {len(results)} scored items")
 
-    # Attach source metadata — never trust the LLM to preserve it
-    parsed["source_url"] = lead.get("source_url", "")
-    parsed["source_name"] = lead.get("source_name", "")
-    parsed["publisher"] = lead.get("source_name", "")
+    by_id = {}
+    for r in results:
+        if isinstance(r, dict) and "item_id" in r:
+            by_id[r["item_id"]] = r
 
-    return parsed
+    final = []
+    for i, it in enumerate(items):
+        r = by_id.get(i)
+        if not r:
+            final.append(_empty(i, it))
+            continue
+        r["source_url"] = it.get("source_url", "")
+        r["source_name"] = it.get("source_name", "")
+        r["publisher"] = it.get("source_name", "")
+        r["published"] = it.get("published", "")
+        final.append(r)
+
+    return final
