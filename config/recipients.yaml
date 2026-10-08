@@ -1,0 +1,4 @@
+recipients:
+  default: ""
+  # Example:
+  # default: "info@example.com,projects@example.com"
