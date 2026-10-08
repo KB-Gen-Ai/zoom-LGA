@@ -1,35 +1,49 @@
 sources:
+  # --- Google News: targeted queries, past 14 days only ---
+
+  - name: Google News — KSA construction awarded
+    type: rss
+    url: https://news.google.com/rss/search?q=saudi+construction+%22awarded+contract%22+OR+%22wins+contract%22+when:14d&hl=en-US&gl=US&ceid=US:en
+
+  - name: Google News — KSA MEP & HVAC awards
+    type: rss
+    url: https://news.google.com/rss/search?q=saudi+MEP+OR+HVAC+OR+%22chilled+water%22+contract+when:14d&hl=en-US&gl=US&ceid=US:en
+
+  - name: Google News — KSA tenders & RFQs
+    type: rss
+    url: https://news.google.com/rss/search?q=saudi+tender+OR+RFQ+OR+%22prequalification%22+construction+when:14d&hl=en-US&gl=US&ceid=US:en
+
+  - name: Google News — KSA infrastructure awards
+    type: rss
+    url: https://news.google.com/rss/search?q=saudi+infrastructure+contract+awarded+metro+OR+airport+OR+water+when:14d&hl=en-US&gl=US&ceid=US:en
+
+  - name: Google News — NEOM / Red Sea / Qiddiya
+    type: rss
+    url: https://news.google.com/rss/search?q=NEOM+OR+%22Red+Sea+Global%22+OR+Qiddiya+contract+awarded+when:14d&hl=en-US&gl=US&ceid=US:en
+
+  - name: Google News — KSA subcontract awards
+    type: rss
+    url: https://news.google.com/rss/search?q=saudi+subcontract+OR+%22MEP+package%22+OR+%22main+contractor%22+when:14d&hl=en-US&gl=US&ceid=US:en
+
+  # --- Industry RSS feeds ---
+
   - name: Construction Week Online
     type: rss
     url: https://www.constructionweekonline.com/rss
-
-  - name: Zawya Projects
-    type: rss
-    url: https://www.zawya.com/en/rss/projects
 
   - name: Arab News Business
     type: rss
     url: https://www.arabnews.com/rss.xml
 
-  - name: Google News — KSA construction awards
-    type: rss
-    url: https://news.google.com/rss/search?q=saudi+construction+awarded+contract&hl=en-US&gl=US&ceid=US:en
-
-  - name: Google News — KSA MEP
-    type: rss
-    url: https://news.google.com/rss/search?q=saudi+MEP+contract+HVAC&hl=en-US&gl=US&ceid=US:en
-
-  - name: Google News — KSA tender
-    type: rss
-    url: https://news.google.com/rss/search?q=saudi+tender+issued+contractor&hl=en-US&gl=US&ceid=US:en
-
 settings:
   crawler:
     word_count_threshold: 80
     page_timeout_ms: 30000
+  llm:
+    model: openai/gpt-oss-120b
 
 thresholds:
-  include_from: 3
+  include_from: 4
 
 recipients:
   default: ""
